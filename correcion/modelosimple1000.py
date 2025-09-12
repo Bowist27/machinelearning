@@ -1,3 +1,14 @@
+# ============================
+#  Regresión lineal (Batch GD)
+#  Dataset: data.csv
+#  X: Socioeconomic Score, Study Hours, Sleep Hours, Attendance (%)
+#  Y: Grades
+#  (sin estandarización)
+# ============================
+
+import csv, math, os, contextlib
+
+# ---------- Núcleo que ya tenías ----------
 def hyp(x, theta, b):
     # Si x es una lista de listas (matriz), procesar cada fila
     if isinstance(x[0], list): 
@@ -17,34 +28,24 @@ def hyp(x, theta, b):
         return y_hat
     
 
-# Funcion de Costo MSE
+# Función de costo MSE (formulación J = (1/2m) * Σ (h - y)^2)
 def mse_cost_from_preds(preds, Y):
     m = len(Y)
-
-    # Errores (h - y)
     errors = [preds[i] - Y[i] for i in range(m)]
-
-    # Errores² y suma 
     sq_errors = [e**2 for e in errors]
     total = sum(sq_errors)
-
-    # Costo final
-    cost = total / (2*m) # J = (1/(2m)) Σ (h - y)^2
-
+    cost = total / (2*m)
     return cost, errors
 
 
 def grad_Descent(X, Y, theta, b, alpha):
-
-    # Derivada respecto a bias
+    # Derivadas de una iteración de Batch GD
     preds = hyp(X, theta, b)
     cost, errors = mse_cost_from_preds(preds, Y)
 
-    m,n = len(Y), len(theta)
+    m, n = len(Y), len(theta)
     db = sum(errors) / m
-    print("Derivada Respecto a Bias:", db)
 
-    # Recorrer cada parametro de theta
     dtheta = []
     for j in range(n):
         s = 0.0
@@ -52,53 +53,85 @@ def grad_Descent(X, Y, theta, b, alpha):
             s += errors[i] * X[i][j]
         s /= m
         dtheta.append(s)
-    print("Derivada respecto a Theta:", dtheta)
 
     theta_new = [theta[j] - alpha * dtheta[j] for j in range(n)]
     b_new = b - alpha * db
 
-     # (Opcional) costo después de actualizar
-    preds_new = hyp(X, theta_new, b_new)
-    cost_new, _ = mse_cost_from_preds(preds_new, Y)
-    print(f"Costo antes: {cost:.6f} | Costo después: {cost_new:.6f}")
-
+    # (Opcional) costo después de actualizar (silenciado por el runner)
     return theta_new, b_new, dtheta, db
 
-import csv, math, os, contextlib
+# ---------- Adaptación al nuevo dataset ----------
 
-FEATURES = ["hours_studied", "sleep_hours", "attendance_percent", "previous_scores"]
-TARGET   = "exam_score"
+# Los nombres exactos de las columnas tal como aparecen en el CSV
+FEATURES = ["Socioeconomic Score", "Study Hours", "Sleep Hours", "Attendance (%)"]
+TARGET   = "Grades"
 
-def load_studentexam(path="studentexam.csv"):
+# Alias/variantes por si el CSV tiene mayúsculas distintas o espacios variables
+HEADER_ALIASES = {
+    "socioeconomic score": "Socioeconomic Score",
+    "study hours": "Study Hours",
+    "sleep hours": "Sleep Hours",
+    "attendance (%)": "Attendance (%)",
+    "attendance %": "Attendance (%)",
+    "grades": "Grades"
+}
+
+def _normalize_header(h):
+    return h.strip().lower().replace("\ufeff", "")
+
+def _remap_headers(fieldnames):
     """
-    Carga el CSV y construye X (lista de listas) y Y (lista).
-    Devuelve: X, Y, ids (por si quiero mapear al student_id)
+    Convierte fieldnames arbitrarios a los esperados usando HEADER_ALIASES.
+    Devuelve un dict: {nombre_original_csv -> nombre_estándar}
     """
-    X, Y, ids = [], [], []
+    mapping = {}
+    for raw in fieldnames:
+        key = _normalize_header(raw)
+        std = HEADER_ALIASES.get(key, None)
+        if std is None:
+            # Si no está en aliases, devuelve el original tal cual
+            std = raw
+        mapping[raw] = std
+    return mapping
+
+def load_data(path="data.csv"):
+    """
+    Carga data.csv y construye X (lista de listas) y Y (lista).
+    Intenta mapear encabezados a los esperados.
+    """
+    X, Y = [], []
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        # Remapeo de encabezados a nombres estándar
+        header_map = _remap_headers(reader.fieldnames)
+
         for row in reader:
-            ids.append(row.get("student_id", None))
-            x = [float(row[k]) for k in FEATURES]
-            y = float(row[TARGET])
+            # Reconstruir la fila con headers estándar
+            std_row = { header_map[k]: v for k, v in row.items() }
+
+            # Extraer features en el orden definido por FEATURES
+            x = []
+            for k in FEATURES:
+                try:
+                    x.append(float(str(std_row[k]).strip()))
+                except (KeyError, ValueError, TypeError):
+                    raise ValueError(f"No pude leer la columna '{k}'. Revisa encabezados y datos numéricos.")
+            try:
+                y = float(str(std_row[TARGET]).strip())
+            except (KeyError, ValueError, TypeError):
+                raise ValueError(f"No pude leer la columna target '{TARGET}'.")
             X.append(x)
             Y.append(y)
-    return X, Y, ids
+    return X, Y
 
 
 def compute_cost(X, Y, theta, b):
-    """Costo J usando funciones."""
     preds = hyp(X, theta, b)
-    cost, _ = mse_cost_from_preds(preds, Y)  # J = (1/(2m)) * sum(err^2)
+    cost, _ = mse_cost_from_preds(preds, Y)
     return cost
 
 
 def evaluate_model(X, Y, theta, b):
-    """
-    Métricas de evaluación (no normalizadas):
-      - J (costo)
-      - MSE, RMSE, MAE y R^2
-    """
     preds = hyp(X, theta, b)
     m = len(Y)
     J, errs = mse_cost_from_preds(preds, Y)
@@ -115,15 +148,11 @@ def evaluate_model(X, Y, theta, b):
 def train_linear_regression_batch(
     X, Y,
     theta=None, b=0.0,
-    alpha=1e-4,        # LR pequeño porque NO hay estandarización
-    num_iters=200_000, # sube/baja según necesites
-    log_each=10_000,   # frecuencia de log
-    mute_inner=True    # silencia los prints dentro de grad_Descent
+    alpha=1e-4,        # LR pequeño porque no hay estandarización
+    num_iters=200_000,
+    log_each=10_000,
+    mute_inner=True
 ):
-    """
-    Entrena por Batch Gradient Descent usando grad_Descent.
-    Devuelve: theta, b, history (lista con el J registrado).
-    """
     n = len(X[0])
     if theta is None:
         theta = [0.0] * n
@@ -131,7 +160,6 @@ def train_linear_regression_batch(
     history = []
     for it in range(1, num_iters + 1):
         if mute_inner:
-            # Evita que en cada iteración se impriman derivadas/costos
             with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
                 theta, b, dtheta, db = grad_Descent(X, Y, theta, b, alpha)
         else:
@@ -145,28 +173,29 @@ def train_linear_regression_batch(
     return theta, b, history
 
 
-def predict_exam_score(hours_studied, sleep_hours, attendance_percent, previous_scores,
-                       theta, b):
-    """Conveniencia para predecir una sola muestra."""
-    x = [hours_studied, sleep_hours, attendance_percent, previous_scores]
+def predict_grade(
+    socioeconomic_score, study_hours, sleep_hours, attendance_percent,
+    theta, b
+):
+    x = [socioeconomic_score, study_hours, sleep_hours, attendance_percent]
     return hyp(x, theta, b)
 
+# ---------- Runner de ejemplo ----------
 
-# --- Ejecución de ejemplo---
-def run_studentexam_training(
-    csv_path="studentexam.csv",
+def run_training(
+    csv_path="data.csv",
     alpha=1e-4,
     iters=200_000,
-    log_each=10_000
+    log_each=20_000
 ):
-    X, Y, ids = load_studentexam(csv_path)
+    X, Y = load_data(csv_path)
 
-    # Inicialización (sin modificar tu código original):
     theta0 = [0.0] * len(FEATURES)
     b0 = 0.0
 
     print(f"Filas: {len(Y)} | Features: {len(FEATURES)} -> {FEATURES}")
     print("Entrenando (Batch GD, sin estandarizar)...")
+
     theta, b, history = train_linear_regression_batch(
         X, Y, theta=theta0, b=b0,
         alpha=alpha, num_iters=iters,
@@ -181,5 +210,7 @@ def run_studentexam_training(
 
     return theta, b, metrics, history
 
-theta, b, metrics, history = run_studentexam_training("studentexam.csv", alpha=1e-4, iters=200_000, log_each=20_000)
-print(theta, b, metrics)
+# Ejecutar entrenamiento si corres este archivo directamente:
+if __name__ == "__main__":
+    theta, b, metrics, history = run_training("data.csv", alpha=1e-4, iters=200_000, log_each=20_000)
+    print(theta, b, metrics)
