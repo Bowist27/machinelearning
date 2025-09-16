@@ -250,6 +250,108 @@ def plot_correlation_matrix(csv_path: str, feature_names: List[str], target_name
     print()
 
 # =========================
+# DISTRIBUCIONES UNIVARIADAS (dataset completo)
+# =========================
+def plot_distributions_full(csv_path: str,
+                            feature_names: List[str],
+                            target_name: str,
+                            bins: int = 30,
+                            title: str = "Distribuciones (Dataset Completo)"):
+    """
+    Dibuja un histograma + KDE por cada columna (features + target) del CSV completo,
+    al estilo del primer code.
+    """
+    # Cargar con pandas y remapear encabezados (igual que en correlación)
+    df = pd.read_csv(csv_path)
+    df.columns = [HEADER_ALIASES.get(_normalize_header(col), col) for col in df.columns]
+
+    cols = feature_names + [target_name]
+    df = df[cols].select_dtypes(include=['float64', 'int64'])  # solo numéricos
+
+    n = len(cols)
+    ncols = 3
+    nrows = math.ceil(n / ncols)
+
+    plt.figure(figsize=(5*ncols, 3.6*nrows))
+    for i, col in enumerate(cols, 1):
+        plt.subplot(nrows, ncols, i)
+        sns.histplot(df[col].dropna(), kde=True, bins=bins)
+        plt.title(f'Distribución de {col}')
+        plt.grid(True, alpha=0.25)
+    plt.suptitle(title, fontsize=14, y=1.02, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+    plt.close()
+
+
+# =========================
+# DISTRIBUCIONES POR SPLIT (opcional, overlay)
+# =========================
+def plot_distributions_by_split(
+    Xtr, Xva, Xte, Ytr, Yva, Yte,
+    feature_names: List[str],
+    target_name: str,
+    bins: int = 30,
+    standardized: bool = False,
+    title: str = "Distribuciones por Split (overlay)"
+):
+    """
+    Superpone las distribuciones de Train/Val/Test por variable en una rejilla.
+    Útil para revisar shift de distribución entre splits.
+    """
+    items = feature_names + [target_name]
+    n = len(items)
+    ncols = 3
+    nrows = math.ceil(n / ncols)
+
+    # Preparar dataframes largos para seaborn
+    # Construimos listas por variable y split
+    data = []
+    for j, name in enumerate(items):
+        if j < len(feature_names):
+            col_tr = [row[j] for row in Xtr]
+            col_va = [row[j] for row in Xva]
+            col_te = [row[j] for row in Xte]
+        else:
+            col_tr, col_va, col_te = Ytr, Yva, Yte
+
+        for v in col_tr:
+            data.append({"variable": name, "valor": v, "split": "Train"})
+        for v in col_va:
+            data.append({"variable": name, "valor": v, "split": "Validation"})
+        for v in col_te:
+            data.append({"variable": name, "valor": v, "split": "Test"})
+
+    dfl = pd.DataFrame(data)
+
+    plt.figure(figsize=(5*ncols, 3.8*nrows))
+    for i, name in enumerate(items, 1):
+        ax = plt.subplot(nrows, ncols, i)
+        # Histograma apilado no ayuda aquí; mejor densidades superpuestas
+        # para distinguir splits. Usamos kdeplot + hist opcional suave.
+        # Primero hist fino solo para base (alpha bajo)
+        for split, alpha in zip(["Train", "Validation", "Test"], [0.35, 0.35, 0.35]):
+            vals = dfl[(dfl["variable"] == name) & (dfl["split"] == split)]["valor"].dropna()
+            if len(vals) > 0:
+                sns.histplot(vals, bins=bins, stat="density", alpha=alpha, element="step", ax=ax)
+
+        # Luego KDE por split para diferenciarlos
+        for split in ["Train", "Validation", "Test"]:
+            subset = dfl[(dfl["variable"] == name) & (dfl["split"] == split)]["valor"].dropna()
+            if len(subset) > 1:
+                sns.kdeplot(subset, ax=ax, label=split)
+
+        ax.set_title(f'{name} {"(std)" if standardized else "(raw)"}')
+        ax.grid(True, alpha=0.25)
+        if i == 1:
+            ax.legend()
+    plt.suptitle(title, fontsize=14, y=1.02, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+    plt.close()
+
+
+# =========================
 # HISTOGRAMAS CONSOLIDADOS
 # =========================
 def plot_all_histograms(
@@ -323,12 +425,19 @@ def plot_actual_vs_pred(y_true, y_pred, title="Actual vs Predicted"):
 # =========================
 def run_experiment(csv_path: str, feature_names: List[str], target_name: str,
                    alpha=5e-2, epochs=4000, tol=1e-8, verbose=False, plot=True, title="",
-                   hist_mode="raw", show_correlation=True):
-    
-    # MOSTRAR MATRIZ DE CORRELACIÓN (SOLO UNA VEZ AL INICIO)
+                   hist_mode="raw", show_correlation=True,
+                   show_distributions_full=True,
+                   show_distributions_full_std=False,
+                   show_distributions_by_split=False):
+    # 0) (opcional) Matriz de correlación al inicio
     if show_correlation:
         plot_correlation_matrix(csv_path, feature_names, target_name)
-    
+
+    # 0b) (opcional) Distribuciones del dataset completo (RAW)
+    if show_distributions_full:
+        plot_distributions_full(csv_path, feature_names, target_name,
+                                bins=30, title="Distribuciones (Dataset Completo - RAW)")
+
     # 1) Cargar datos
     headers, rows = read_csv_numeric(csv_path)
 
@@ -341,7 +450,6 @@ def run_experiment(csv_path: str, feature_names: List[str], target_name: str,
     Xtr, Xva, Xte, Ytr, Yva, Yte = train_val_test_split(
         X, Y, train_ratio=0.5, val_ratio=0.25, test_ratio=0.25, seed=123
     )
-
     print(f"→ División: Train={len(Xtr)}, Val={len(Xva)}, Test={len(Xte)}")
 
     # 4) Estandarizar SOLO features usando estadísticas de TRAIN
@@ -350,7 +458,18 @@ def run_experiment(csv_path: str, feature_names: List[str], target_name: str,
     Xva_s = zscore_transform(Xva, mu, sd)
     Xte_s = zscore_transform(Xte, mu, sd)
 
-    # Histograma único (elige "raw" o "std")
+    # (opcional) Distribuciones del dataset completo con datos estandarizados
+    if show_distributions_full_std:
+        # armamos un DF estandarizado temporal sólo para graficar
+        df_std = pd.DataFrame(Xtr_s + Xva_s + Xte_s, columns=feature_names)
+        df_std[target_name] = pd.Series(Ytr + Yva + Yte).values
+        # guardado temporal para reusar la misma función
+        tmp_path = "_tmp_std_view.csv"
+        df_std.to_csv(tmp_path, index=False)
+        plot_distributions_full(tmp_path, feature_names, target_name,
+                                bins=30, title="Distribuciones (Dataset Completo - ESTANDARIZADO)")
+
+    # Histograma por split (tu función existente)
     if plot and hist_mode == "raw":
         plot_all_histograms(
             Xtr, Xva, Xte, Ytr, Yva, Yte,
@@ -364,53 +483,73 @@ def run_experiment(csv_path: str, feature_names: List[str], target_name: str,
             bins=20, suptitle=f"Datos ESTANDARIZADOS - {title or 'Experimento'}"
         )
 
-    # 5) Entrenar con BGD SOLO con TRAIN
+    # (opcional) Overlay de distribuciones por split (RAW o STD)
+    if show_distributions_by_split:
+        if hist_mode == "std":
+            plot_distributions_by_split(
+                Xtr_s, Xva_s, Xte_s, Ytr, Yva, Yte,
+                feature_names, target_name,
+                bins=30, standardized=True,
+                title="Distribuciones por Split (overlay, STD)"
+            )
+        else:
+            plot_distributions_by_split(
+                Xtr, Xva, Xte, Ytr, Yva, Yte,
+                feature_names, target_name,
+                bins=30, standardized=False,
+                title="Distribuciones por Split (overlay, RAW)"
+            )
+
+    # 5) Entrenamiento BGD (igual que tenías)
     theta0 = [0.0] * len(Xtr_s[0])
     b0 = 0.0
     theta, b, history = train(
         Xtr_s, Ytr, theta=theta0, b=b0, alpha=alpha, epochs=epochs, tol=tol, verbose=verbose
     )
 
-    # 6) Evaluación en Train/Val/Test (MSE + R^2)
+    # 6) Evaluación (igual)
     mse_tr = mse_from_model(Xtr_s, Ytr, theta, b)
     mse_va = mse_from_model(Xva_s, Yva, theta, b)
     mse_te = mse_from_model(Xte_s, Yte, theta, b)
 
     r2_va = r2_from_model(Xva_s, Yva, theta, b)
     r2_te = r2_from_model(Xte_s, Yte, theta, b)
+    r2_tr = r2_from_model(Xtr_s, Ytr, theta, b)
 
-    # 7) Gráficas de dispersión Actual vs Predicho
-    # Predicciones completas para Val y Test
+    # 7) Dispersión Actual vs Predicho (igual)
     preds_va = hyp(Xva_s, theta, b)
     preds_te = hyp(Xte_s, theta, b)
+    preds_tr = hyp(Xtr_s, theta, b)
 
-    # Gráficas tipo "Actual vs Predicted"
+    plot_actual_vs_pred(Ytr, preds_tr, title=f'Actual vs Predicted (Train) - {title or "Experimento"}')
     plot_actual_vs_pred(Yva, preds_va, title=f'Actual vs Predicted (Validación) - {title or "Experimento"}')
     plot_actual_vs_pred(Yte, preds_te, title=f'Actual vs Predicted (Test) - {title or "Experimento"}')
-
 
     print(f"\n== {title or 'Experimento'} ==")
     print(f"Features: {feature_names}")
     print(f"Theta (sobre features estandarizadas): {theta}")
     print(f"b: {b:.6f}")
     print(f"MSE Train: {mse_tr:.4f} | MSE Val: {mse_va:.4f} | MSE Test: {mse_te:.4f}")
-    print(f"R^2  Val:  {r2_va:.4f} | R^2  Test: {r2_te:.4f}")
+    print(f"R^2  Train:  {r2_tr:.4f} | R^2  Val:  {r2_va:.4f} | R^2  Test: {r2_te:.4f}")
 
-    # Predicciones de ejemplo (Test)
+    sample_train = min(5, len(Xtr_s))
+    preds_sample_tr = hyp(Xtr_s[:sample_train], theta, b)
+    print("\nPredicciones de ejemplo (Train):")
+    for i in range(sample_train):
+        print(f"  y_pred={preds_sample_tr[i]:.2f} | y_real={Ytr[i]:.2f} | x(estd)={Xtr_s[i]}")  
+
     sample = min(5, len(Xte_s))
     preds_sample = hyp(Xte_s[:sample], theta, b)
     print("\nPredicciones de ejemplo (Test):")
     for i in range(sample):
         print(f"  y_pred={preds_sample[i]:.2f} | y_real={Yte[i]:.2f} | x(estd)={Xte_s[i]}")
 
-    # Predicciones de ejemplo (Validación)
     sample_val = min(5, len(Xva_s))
     preds_sample_val = hyp(Xva_s[:sample_val], theta, b)
     print("\nPredicciones de ejemplo (Validación):")
     for i in range(sample_val):
         print(f"  y_pred={preds_sample_val[i]:.2f} | y_real={Yva[i]:.2f} | x(estd)={Xva_s[i]}")
 
-    # 7) Curva de aprendizaje (opcional)
     if plot:
         plt.figure(figsize=(7,5))
         plt.plot(range(1, len(history)+1), history)
@@ -429,20 +568,26 @@ def run_experiment(csv_path: str, feature_names: List[str], target_name: str,
         "mu": mu, "sd": sd, "history": history
     }
 
+
 # =========================
 # MAIN: un solo experimento para data.csv
 # =========================
 def main():
-    CSV_PATH = "data.csv"   # tu nuevo dataset
+    CSV_PATH = "data.csv"
     TARGET = "Grades"
     FEATURES_LIST = ["Socioeconomic Score", "Study Hours", "Sleep Hours", "Attendance (%)"]
 
     _ = run_experiment(
         CSV_PATH, FEATURES_LIST, TARGET,
-        alpha=5e-2, epochs=4000, tol=1e-10, verbose=False, plot=True,
-        title="Regresión Lineal - data.csv", hist_mode="raw",  # cambia a "std" si prefieres
-        show_correlation=True  # La matriz de correlación aparecerá SOLO UNA VEZ al inicio
+        alpha=5e-2, epochs=4000, tol=1e-10, verbose=True, plot=True,
+        title="Regresión Lineal - data.csv",
+        hist_mode="std",                   # hist por split en estandarizado (tu función existente)
+        show_correlation=True,             # matriz de correlación al inicio (ACTIVADA)
+        show_distributions_full=True,      # distribuciones (RAW) tipo primer code
+        show_distributions_full_std=False, # pon True si también quieres verlas ESTANDARIZADAS
+        show_distributions_by_split=True   # overlay Train/Val/Test (std porque hist_mode="std")
     )
+
 
 if __name__ == "__main__":
     main()

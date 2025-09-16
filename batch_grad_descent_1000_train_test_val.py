@@ -46,7 +46,7 @@ def grad_Descent(X, Y, theta, b, alpha):
 FEATURES = ["Socioeconomic Score", "Study Hours", "Sleep Hours", "Attendance (%)"]
 TARGET   = "Grades"
 
-def load_dataset(path="data.csv"):
+def load_dataset(path="\data.csv"):
     X, Y = [], []
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
